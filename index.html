@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video Downloader</title>
+<style>
+:root{--bg:#eef1f5;--card:#fff;--ink:#10212b;--mut:#5d6b76;--line:#d7dde3;--acc:#2547d0;--ok:#0f8a5f;--bad:#c4302b}
+@media(prefers-color-scheme:dark){:root{--bg:#0e141a;--card:#16202a;--ink:#e8eef3;--mut:#93a3b0;--line:#27333e;--acc:#6b8cff}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:620px;margin:0 auto;padding:32px 16px 56px}
+h1{font-size:2rem;letter-spacing:-.02em;margin:0 0 4px}
+.sub{color:var(--mut);margin:0 0 22px}
+.row{display:flex;gap:8px}
+input,select{width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);font:inherit}
+button{padding:12px 20px;border:0;border-radius:10px;background:var(--acc);color:#fff;font:inherit;font-weight:600;cursor:pointer}
+button:disabled{opacity:.5;cursor:default}
+:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px;margin-top:18px}
+.meta{display:flex;gap:14px;align-items:center}
+.meta img{width:136px;height:76px;object-fit:cover;border-radius:8px;background:var(--line)}
+.meta>div{min-width:0}
+.meta b{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;overflow-wrap:anywhere;line-height:1.3}
+.mut,label{color:var(--mut);font-size:.9rem}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 16px}
+.chip{padding:8px 16px;border-radius:999px;background:transparent;color:var(--ink);border:1px solid var(--line);font-weight:500}
+.chip.on{background:var(--acc);border-color:var(--acc);color:#fff}
+.tabs{margin-top:18px;margin-bottom:0}
+.bar{height:8px;border-radius:99px;background:var(--line);overflow:hidden;margin:14px 0 6px}
+.bar i{display:block;height:100%;width:0;background:var(--acc);transition:width .3s}
+.err{color:var(--bad);margin-top:12px}
+.warn{margin:0 0 16px;padding:10px 14px;border-left:4px solid #d9a400;background:var(--card);font-size:.9rem}
+a.save{display:block;text-align:center;margin-top:12px;padding:12px;border-radius:10px;background:var(--ok);color:#fff;font-weight:600;text-decoration:none;word-break:break-word}
+.hide{display:none}
+@media(max-width:440px){.meta{flex-direction:column;align-items:flex-start}.meta img{width:100%;height:auto;aspect-ratio:16/9}}
+</style>
+</head>
+<body>
+<main>
+  <h1>Video Downloader</h1>
+  <p class="sub">Paste a YouTube, Instagram or Facebook link, choose a quality or audio format, and save the file.</p>
+  {% if not has_ffmpeg %}<p class="warn">ffmpeg was not found, so video is limited to single-file qualities and audio is saved without conversion. See the README.</p>{% endif %}
+
+  <div class="row">
+    <input id="url" type="url" placeholder="Paste a YouTube, Instagram or Facebook link" autocomplete="off" aria-label="Video link">
+    <button id="go">Fetch</button>
+  </div>
+  <div id="err" class="err hide" role="alert"></div>
+
+  <section id="res" class="card hide">
+    <div class="meta">
+      <img id="thumb" alt="" referrerpolicy="no-referrer">
+      <div><b id="title"></b><span class="mut" id="chan"></span><br><span class="mut" id="dur"></span></div>
+    </div>
+
+    <div class="chips tabs">
+      <button class="chip on" data-kind="video">Video</button>
+      <button class="chip" data-kind="audio">Audio</button>
+    </div>
+
+    <div id="vbox">
+      <label>Quality</label><div id="qs" class="chips"></div>
+      <label for="vfmt">File type</label>
+      <select id="vfmt"><option value="mp4">MP4 (plays everywhere)</option><option value="mkv">MKV</option><option value="webm">WebM</option></select>
+    </div>
+
+    <div id="abox" class="hide">
+      <label>Audio format</label><div id="afs" class="chips"></div>
+      <div id="brbox"><label for="abr">Bitrate</label>
+        <select id="abr"><option value="128">128 kbps</option><option value="192" selected>192 kbps</option><option value="256">256 kbps</option><option value="320">320 kbps</option></select>
+      </div>
+    </div>
+
+    <button id="dl" style="width:100%;margin-top:18px">Download</button>
+    <div id="prog" class="hide"><div class="bar"><i id="fill"></i></div><span class="mut" id="st"></span></div>
+    <a id="save" class="save hide">Save file</a>
+  </section>
+</main>
+
+<script>
+const $=id=>document.getElementById(id);
+const show=(el,on)=>el.classList.toggle("hide",!on);
+let kind="video",height=null,afmt="mp3",timer=null;
+
+async function api(path,body){
+  const r=await fetch(path,body?{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}:undefined);
+  const j=await r.json();
+  if(!r.ok)throw new Error(j.error||"Request failed");
+  return j;
+}
+function chips(box,items,label,cb){
+  box.innerHTML="";
+  items.forEach((v,i)=>{
+    const b=document.createElement("button");
+    b.className="chip"+(i?"":" on");b.textContent=label(v);
+    b.onclick=()=>{[...box.children].forEach(c=>c.classList.remove("on"));b.classList.add("on");cb(v)};
+    box.appendChild(b);
+  });
+  cb(items[0]);
+}
+function fail(e){$("err").textContent=e.message;show($("err"),true)}
+
+$("go").onclick=async()=>{
+  show($("err"),false);show($("res"),false);$("go").disabled=true;$("go").textContent="Fetching";
+  try{
+    const d=await api("/api/info",{url:$("url").value.trim()});
+    show($("thumb"),!!d.thumbnail);$("thumb").src=d.thumbnail||"";$("title").textContent=d.title||"Untitled";
+    $("chan").textContent=d.channel||"";
+    const m=Math.floor(d.duration/60),s=String(d.duration%60).padStart(2,"0");
+    $("dur").textContent=d.duration?"Length "+m+":"+s:"";
+    chips($("qs"),d.heights.length?d.heights:[0],h=>h?h+"p":"Best available",h=>height=h);
+    show($("prog"),false);show($("save"),false);show($("res"),true);
+  }catch(e){fail(e)}
+  $("go").disabled=false;$("go").textContent="Fetch";
+};
+$("url").onkeydown=e=>{if(e.key==="Enter")$("go").click()};
+$("thumb").onerror=()=>show($("thumb"),false);
+
+document.querySelectorAll("[data-kind]").forEach(b=>b.onclick=()=>{
+  kind=b.dataset.kind;
+  document.querySelectorAll("[data-kind]").forEach(c=>c.classList.toggle("on",c===b));
+  show($("vbox"),kind==="video");show($("abox"),kind==="audio");
+});
+chips($("afs"),["mp3","m4a","opus","wav","flac"],v=>v.toUpperCase(),v=>{afmt=v;show($("brbox"),["mp3","m4a","opus"].includes(v))});
+
+$("dl").onclick=async()=>{
+  show($("err"),false);show($("save"),false);show($("prog"),true);
+  $("fill").style.width="0%";$("st").textContent="Starting";$("dl").disabled=true;
+  try{
+    const {job}=await api("/api/download",{url:$("url").value.trim(),kind,height,vfmt:$("vfmt").value,afmt,abr:$("abr").value});
+    clearInterval(timer);
+    timer=setInterval(async()=>{
+      try{
+        const s=await api("/api/status/"+job);
+        $("fill").style.width=s.percent+"%";
+        if(s.status==="downloading")$("st").textContent=s.percent+"% at "+s.speed+", "+s.eta+" left";
+        if(s.status==="processing")$("st").textContent="Processing the file";
+        if(s.status==="done"){clearInterval(timer);$("st").textContent="Ready";$("save").href="/api/file/"+job;$("save").textContent="Save "+s.file;show($("save"),true);$("dl").disabled=false}
+        if(s.status==="error"){clearInterval(timer);$("st").textContent="";show($("prog"),false);fail(new Error(s.error));$("dl").disabled=false}
+      }catch(e){clearInterval(timer);fail(e);$("dl").disabled=false}
+    },800);
+  }catch(e){fail(e);show($("prog"),false);$("dl").disabled=false}
+};
+</script>
+</body>
+</html>
